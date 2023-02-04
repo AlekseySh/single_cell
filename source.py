@@ -3,10 +3,11 @@ from pprint import pprint
 
 import torch.nn
 from oml import const
-from oml.interfaces.datasets import IDatasetWithLabels
+from oml.interfaces.datasets import IDatasetWithLabels, IDatasetQueryGallery
 from oml.interfaces.models import IExtractor
 from oml.interfaces.models import IPairwiseModel
-from oml.utils.misc_torch import elementwise_dist, assign_2d, pairwise_dist
+from oml.utils.misc_torch import pairwise_dist
+from torchvision.ops import MLP
 
 
 class BioDatasetWithLabels(IDatasetWithLabels):
@@ -24,7 +25,7 @@ class BioDatasetWithLabels(IDatasetWithLabels):
             const.INPUT_TENSORS_KEY: self.descriptors[idx],
             const.LABELS_KEY: self.labels[idx],
             const.CATEGORIES_KEY: self.categories[idx],
-            "is_first_type": self.is_first_type[idx]
+            "is_first_type": bool(self.is_first_type[idx])
         }
         return item
 
@@ -35,18 +36,44 @@ class BioDatasetWithLabels(IDatasetWithLabels):
         return self.labels
 
 
+class BioDatasetQueryGallery(IDatasetQueryGallery):
+
+    def __init__(self, labels, is_first_type, descriptors):
+        assert all(c == 2 for _, c in Counter(labels).items())
+
+        self.labels = labels
+        self.is_first_type = is_first_type
+        self.descriptors = descriptors
+
+    def __getitem__(self, idx):
+        # assume 1st type of records are always queries
+        is_query = bool(self.is_first_type[idx])
+
+        item = {
+            const.LABELS_KEY: self.labels[idx],
+            const.EMBEDDINGS_KEY: self.descriptors[idx],
+            const.IS_QUERY_KEY: is_query,
+            const.IS_GALLERY_KEY: not is_query
+        }
+        return item
+
+    def __len__(self):
+        return len(self.labels)
+
+
 class SimpleExtractor(IExtractor):
 
     def __init__(self, in_dim, out_dim):
         super(SimpleExtractor, self).__init__()
-        self.fc = torch.nn.Linear(in_features=in_dim, out_features=out_dim)
+        self.out_dim = out_dim
+        self.head = MLP(in_channels=in_dim, hidden_channels=[32, 32, 32, out_dim])
 
     def forward(self, x):
-        return self.fc(x)
+        return self.head(x)
 
     @property
     def feat_dim(self):
-        return self.fc.out_features
+        return self.out_dim
 
 
 class SimpleSiamese(IPairwiseModel):
@@ -56,9 +83,9 @@ class SimpleSiamese(IPairwiseModel):
         self.extractor1 = extractor1
         self.extractor2 = extractor2
 
-        self.head = torch.nn.Linear(
-            in_features=self.extractor1.feat_dim + self.extractor2.feat_dim,
-            out_features=1
+        self.head = MLP(
+            in_channels=self.extractor1.feat_dim + self.extractor2.feat_dim,
+            hidden_channels=[32, 32, 1]
         )
 
     def forward(self, x1, x2):
@@ -72,22 +99,34 @@ class SimpleSiamese(IPairwiseModel):
 
 class PairsSamplerTwoModalities:
 
-    def __init__(self):
+    def __init__(self, hard: bool):
         super(PairsSamplerTwoModalities, self).__init__()
+        self.hard = hard
 
     def sample(self, features_a, features_b, labels_a, labels_b):
+        if self.hard:
+            return self.sample_hard(features_a, features_b, labels_a, labels_b)
+        else:
+            return self.sample_all(features_a, features_b, labels_a, labels_b)
+
+    def sample_hard(self, features_a, features_b, labels_a, labels_b):
+        # Note, the code was not tested properly
+        assert (labels_a.unique() == labels_b.unique()).all(), (labels_a, labels_b)
+        assert (len(features_a) == len(labels_a)) and (len(features_b) == len(labels_b))
+
         n = len(features_a)
 
         distances = pairwise_dist(features_a, features_b)
         is_positive = labels_a.unsqueeze(-1) == labels_b
+        assert distances.shape == is_positive.shape
 
         distances_pos = distances.clone()
         distances_pos[~is_positive] = -float("inf")
-        ii_hard_pos = distances_pos.argmax(dim=1)
+        ii_hard_pos = distances_pos.argmax(dim=0)
 
         distances_neg = distances.clone()
         distances_neg[is_positive] = +float("inf")
-        ii_hard_neg = distances_neg.argmin(dim=1)
+        ii_hard_neg = distances_neg.argmin(dim=0)
 
         ii = torch.arange(n)
 
@@ -99,15 +138,31 @@ class PairsSamplerTwoModalities:
 
         return ids_1, ids_2, is_negative
 
+    def sample_all(self, features_a, features_b, labels_a, labels_b):
+        assert (labels_a.unique() == labels_b.unique()).all(), (labels_a, labels_b)
+        assert (len(features_a) == len(labels_a)) and (len(features_b) == len(labels_b))
+
+        ids1 = []
+        ids2 = []
+        is_negative = []
+
+        for i in range(len(labels_a)):
+            for j in range(len(labels_b)):
+                ids1.append(i)
+                ids2.append(j)
+                is_negative.append(labels_a[i] != labels_b[j])
+
+        return torch.tensor(ids1).long(), torch.tensor(ids2).long(), torch.tensor(is_negative).bool()
+
 
 def check_miner():
     labels_a = torch.tensor([0, 1, 2, 3])
-    labels_b = torch.tensor([1, 2, 3, 0])
+    labels_b = torch.tensor([1, 2, 3, 0, 0])
 
     features_a = torch.ones((4, 3)) * labels_a.view(-1, 1)
-    features_b = torch.ones((4, 3)) * labels_b.view(-1, 1) + 0.1
+    features_b = torch.ones((5, 3)) * labels_b.view(-1, 1) + 0.1
 
-    ids_1, ids_2, is_negative = PairsSamplerTwoModalities().sample(
+    ids_1, ids_2, is_negative = PairsSamplerTwoModalities(hard=False).sample(
         features_a,
         features_b,
         labels_a,
