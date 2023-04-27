@@ -1,12 +1,12 @@
 import numpy as np
+import ot
 import torch
 import torch.nn.functional as F
-import ot
 
-
+from tqdm.notebook import tqdm
 from networkx.algorithms import bipartite
 from scipy import sparse
-from tqdm.notebook import tqdm
+
 
 
 
@@ -38,6 +38,7 @@ def topN_logits(logits, topn, ):
             
     return n_logits
 
+
 def get_bipartite_matching_adjacency_matrix(raw_logits, threshold_quantile=0.995):
     #getting rid of unpromising graph connections
     weights = raw_logits.copy()
@@ -54,8 +55,6 @@ def get_bipartite_matching_adjacency_matrix(raw_logits, threshold_quantile=0.995
     bipartite_matching_adjacency = np.zeros(raw_logits.shape)
     bipartite_matching_adjacency[np.arange(raw_logits.shape[0]), best_matches]=1
     return bipartite_matching_adjacency
-
-
 
 
 def get_OT_adjacency_matrix(sim_matrix, entropy_reg=0.01, verbose=False):

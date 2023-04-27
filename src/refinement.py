@@ -5,7 +5,9 @@ import torch.nn
 from oml import const
 from oml.interfaces.datasets import IDatasetWithLabels, IDatasetQueryGallery
 from oml.interfaces.models import IExtractor
+
 #from oml.interfaces.models import IPairwiseDistanceModel
+
 from oml.interfaces.models import IPairwiseModel
 from oml.utils.misc_torch import pairwise_dist
 from torchvision.ops import MLP
