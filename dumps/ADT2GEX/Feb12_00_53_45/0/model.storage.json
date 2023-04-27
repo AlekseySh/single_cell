@@ -1,0 +1,13 @@
+{
+  "logdir": "/storage1/nerusskikh/OML/dumps/ADT2GEX/Feb12_00_53_45/0",
+  "topk": 1,
+  "loader_key": "valid",
+  "metric_key": "avg_acc",
+  "minimize": false,
+  "storage": [
+    {
+      "logpath": "/storage1/nerusskikh/OML/dumps/ADT2GEX/Feb12_00_53_45/0/model.0339.pth",
+      "metric": 0.059733107686042786
+    }
+  ]
+}
